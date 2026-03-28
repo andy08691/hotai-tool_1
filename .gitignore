@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Data files (sensitive customer data)
+*.xlsx
+*.csv
+step1/
+step2/
+step3/
+
+# Claude internal
+.claude/
+
+# PyInstaller
+dist/
+build/
+*.spec
