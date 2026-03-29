@@ -79,9 +79,21 @@ PHONE_FIELDS = [
 PHONE_ELEC_FIELDS = ["手機(和泰會員)電銷", "手機(CR)電銷"]
 PHONE_SMS_FIELDS = ["手機(和泰會員)SMS", "手機(CR)SMS"]
 
-DNC_VALUES = {"不聯繫", "不連繫", "電話不聯繫", "電話不要打"}
+DNC_VALUES = {
+    "不聯繫", "不連繫",
+    "電話不聯繫", "電話不要打", "該電話不可聯繫",
+    "簡訊不聯繫",
+    "個資未授權",
+}
 
-NULL_LIKE = {"", "none", "null", "nan", "#n/a", "n/a", "電話不聯繫", "電話不要打", "不聯繫", "不連繫", "無", "-", "--"}
+NULL_LIKE = {
+    "", "none", "null", "nan", "#n/a", "n/a",
+    "電話不聯繫", "電話不要打", "該電話不可聯繫",
+    "不聯繫", "不連繫",
+    "簡訊不聯繫",
+    "個資未授權",
+    "無", "-", "--",
+}
 
 G_FILE_PATTERN = re.compile(r"(?:^|[^A-Z0-9])G(\d+)(?:_|\b|$)", re.IGNORECASE)
 
@@ -252,6 +264,10 @@ def read_excel_records(path: Path, filter_mode: str = "none") -> Tuple[List[Reco
             if col_idx < len(row_values):
                 record_data[canonical] = clean_text(row_values[col_idx])
         if not any(record_data.values()):
+            continue
+        phones_empty = not any(record_data.get(f, "") for f in PHONE_FIELDS)
+        line_empty = not record_data.get("LINEID", "")
+        if phones_empty and line_empty:
             continue
         rec = Record(
             data=record_data,
