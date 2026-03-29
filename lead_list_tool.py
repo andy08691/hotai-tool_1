@@ -33,6 +33,8 @@ CANONICAL_COLUMNS = [
     "現保有車交車年份_T",
     "現保有車款_L",
     "現保有車交車年份_L",
+    "簡訊留名單",
+    "LINE留名單",
 ]
 
 OUTPUT_METADATA_COLUMNS = [
@@ -660,148 +662,52 @@ def remove_recent_orders(output_path: Path, recent_orders_folder: Path) -> Dict[
 
 
 
-def infer_url_mode(column_name: str) -> str:
-    lowered = column_name.lower()
-    if "line" in lowered:
-        return "line"
-    if "sms" in lowered or "簡訊" in column_name:
-        return "sms"
-    return "auto"
+def export_phone_template(output_path: Path, template_output_path: Path) -> int:
+    if not output_path.exists():
+        raise RuntimeError("請先建立或選擇整理好的輸出檔案。")
+    wb = load_workbook(output_path, read_only=True)
+    if MASTER_SHEET not in wb.sheetnames:
+        raise RuntimeError("找不到 Working_List，請先執行『合併檔案』。")
+
+    rows = sheet_to_dicts(wb[MASTER_SHEET])
+    seen: set = set()
+    phones: List[str] = []
+    for row in rows:
+        for field in ["手機(CR)SMS", "手機(和泰會員)SMS"]:
+            phone = normalize_phone(row.get(field, ""))
+            if phone and phone not in seen:
+                seen.add(phone)
+                phones.append(phone)
+                break
+
+    with template_output_path.open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Phone"])
+        for phone in phones:
+            writer.writerow([phone])
+
+    return len(phones)
 
 
 
-def get_source_url_columns(headers: List[str], mode: str) -> List[str]:
-    line_cols = []
-    sms_cols = []
-    generic_cols = []
-    for header in headers:
-        raw = clean_text(header)
-        if not raw:
-            continue
-        lowered = raw.lower()
-        if ("url" in lowered or "網址" in raw or "縮網址" in raw or "短網址" in raw):
-            generic_cols.append(header)
-            if "line" in lowered:
-                line_cols.append(header)
-            if "sms" in lowered or "簡訊" in raw:
-                sms_cols.append(header)
-    if mode == "line":
-        return line_cols or generic_cols
-    if mode == "sms":
-        return sms_cols or generic_cols
-    return generic_cols
-
-
-
-def build_short_url_maps(folder: Path, mode: str) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, Tuple[str, str]], Dict[str, Tuple[str, str]], List[Dict[str, str]]]:
-    phone_to_url: Dict[str, Tuple[str, str]] = {}
-    oneid_to_url: Dict[str, Tuple[str, str]] = {}
-    lineid_to_url: Dict[str, Tuple[str, str]] = {}
-    manifest = []
-
-    for path in folder.iterdir():
-        if not path.is_file() or path.name.startswith("~$"):
-            continue
-        ext = path.suffix.lower()
-        if ext not in {".xlsx", ".csv"}:
-            continue
-        stat = path.stat()
-        manifest.append(
-            {
-                "operation": "short_url",
-                "file_name": path.name,
-                "path": str(path),
-                "size": str(stat.st_size),
-                "modified_time": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
-                "sha1": file_sha1(path),
-            }
-        )
-
-        if ext == ".csv":
-            headers, rows = read_csv_rows(path)
-            url_cols = get_source_url_columns(headers, mode)
-            if not url_cols:
-                continue
-            phone_key = next((h for h in headers if normalize_header(h) in {"PHONE", "MOBILE", "手機".upper()}), None)
-            oneid_key = next((h for h in headers if normalize_header(h) in {"ONEID", "ONEID序號", "ONEID序號".upper(), "ONE ID 序號".upper()}), None)
-            line_key = next((h for h in headers if normalize_header(h) in {"LINEID", "LINE ID".upper()}), None)
-            count_key = next((h for h in headers if h.lower() == "count" or "次數" in h), None)
-            for row in rows:
-                url = clean_text(row.get(url_cols[0], ""))
-                if not url:
-                    continue
-                count = clean_text(row.get(count_key, "")) if count_key else ""
-                if phone_key:
-                    phone = normalize_phone(row.get(phone_key, ""))
-                    if phone and phone not in phone_to_url:
-                        phone_to_url[phone] = (url, count)
-                if oneid_key:
-                    one_id = normalize_id(row.get(oneid_key, ""))
-                    if one_id and one_id not in oneid_to_url:
-                        oneid_to_url[one_id] = (url, count)
-                if line_key:
-                    line_id = normalize_id(row.get(line_key, ""))
-                    if line_id and line_id not in lineid_to_url:
-                        lineid_to_url[line_id] = (url, count)
-        else:
-            wb = load_workbook(path, data_only=True, read_only=True)
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                rows = list(ws.iter_rows(values_only=True))
-                if not rows:
-                    continue
-                headers = [clean_text(v) for v in rows[0]]
-                url_cols = get_source_url_columns(headers, mode)
-                if not url_cols:
-                    continue
-                idx = {header: i for i, header in enumerate(headers) if header}
-                phone_headers = [h for h in headers if normalize_header(h) in {"PHONE", "MOBILE", normalize_header("手機(CR)SMS"), normalize_header("手機(和泰會員)SMS"), normalize_header("手機") }]
-                oneid_header = next((h for h in headers if normalize_header(h) in {normalize_header("ONE ID 序號"), "ONEID"}), None)
-                line_header = next((h for h in headers if normalize_header(h) == normalize_header("LINEID")), None)
-                count_header = next((h for h in headers if h.lower() == "count" or "次數" in h), None)
-                for row in rows[1:]:
-                    url = ""
-                    for col in url_cols:
-                        value = row[idx[col]] if idx[col] < len(row) else ""
-                        value = clean_text(value)
-                        if value.startswith("http"):
-                            url = value
-                            break
-                    if not url:
-                        continue
-                    count = ""
-                    if count_header:
-                        raw = row[idx[count_header]] if idx[count_header] < len(row) else ""
-                        count = clean_text(raw)
-                    for h in phone_headers:
-                        phone = normalize_phone(row[idx[h]] if idx[h] < len(row) else "")
-                        if phone and phone not in phone_to_url:
-                            phone_to_url[phone] = (url, count)
-                    if oneid_header:
-                        one_id = normalize_id(row[idx[oneid_header]] if idx[oneid_header] < len(row) else "")
-                        if one_id and one_id not in oneid_to_url:
-                            oneid_to_url[one_id] = (url, count)
-                    if line_header:
-                        line_id = normalize_id(row[idx[line_header]] if idx[line_header] < len(row) else "")
-                        if line_id and line_id not in lineid_to_url:
-                            lineid_to_url[line_id] = (url, count)
-
-    return phone_to_url, oneid_to_url, lineid_to_url, manifest
-
-
-
-def add_short_urls(output_path: Path, source_folder: Path, target_column_name: str) -> Dict[str, int]:
+def collect_short_urls(output_path: Path, source_csv_path: Path, column_name: str) -> Dict[str, int]:
     if not output_path.exists():
         raise RuntimeError("請先建立或選擇整理好的輸出檔案。")
     wb = load_workbook(output_path)
     if MASTER_SHEET not in wb.sheetnames:
         raise RuntimeError("找不到 Working_List，請先執行『合併檔案』。")
 
-    current_rows = sheet_to_dicts(wb[MASTER_SHEET])
-    mode = infer_url_mode(target_column_name)
-    phone_to_url, oneid_to_url, lineid_to_url, manifest_rows = build_short_url_maps(source_folder, mode)
+    _, csv_rows = read_csv_rows(source_csv_path)
+    phone_to_url: Dict[str, Tuple[str, str]] = {}
+    for row in csv_rows:
+        phone = normalize_phone(row.get("Phone", ""))
+        url = clean_text(row.get("Url", ""))
+        count = clean_text(row.get("Count", ""))
+        if phone and url and phone not in phone_to_url:
+            phone_to_url[phone] = (url, count)
 
-    count_column = f"{target_column_name}_次數"
+    count_column = f"{column_name}_次數"
+    current_rows = sheet_to_dicts(wb[MASTER_SHEET])
     filled = 0
     unmatched = 0
     log_rows = []
@@ -809,64 +715,134 @@ def add_short_urls(output_path: Path, source_folder: Path, target_column_name: s
     for row in current_rows:
         matched_url = ""
         matched_count = ""
-        matched_by = ""
-        for field in PHONE_FIELDS:
+        for field in ["手機(CR)SMS", "手機(和泰會員)SMS"]:
             phone = normalize_phone(row.get(field, ""))
             if phone and phone in phone_to_url:
                 matched_url, matched_count = phone_to_url[phone]
-                matched_by = f"phone:{field}"
                 break
-        if not matched_url:
-            one_id = normalize_id(row.get("ONE ID 序號", ""))
-            if one_id and one_id in oneid_to_url:
-                matched_url, matched_count = oneid_to_url[one_id]
-                matched_by = "oneid"
-        if not matched_url:
-            line_id = normalize_id(row.get("LINEID", ""))
-            if line_id and line_id in lineid_to_url:
-                matched_url, matched_count = lineid_to_url[line_id]
-                matched_by = "lineid"
 
         if matched_url:
-            row[target_column_name] = matched_url
+            if not row.get(column_name, ""):
+                row[column_name] = matched_url
             row[count_column] = matched_count
             filled += 1
         else:
-            row.setdefault(target_column_name, "")
+            row.setdefault(column_name, "")
             row.setdefault(count_column, "")
             unmatched += 1
 
-        log_rows.append(
-            {
-                "姓名": row.get("姓名", ""),
-                "ONE ID 序號": row.get("ONE ID 序號", ""),
-                "LINEID": row.get("LINEID", ""),
-                "手機(CR)SMS": row.get("手機(CR)SMS", ""),
-                "目標欄位": target_column_name,
-                "短網址": row.get(target_column_name, ""),
-                "次數": row.get(count_column, ""),
-                "命中方式": matched_by,
-            }
-        )
+        log_rows.append({
+            "姓名": row.get("姓名", ""),
+            "手機(CR)SMS": row.get("手機(CR)SMS", ""),
+            "目標欄位": column_name,
+            "短網址": row.get(column_name, ""),
+            "次數": row.get(count_column, ""),
+        })
 
-    headers = list(dict.fromkeys(CANONICAL_COLUMNS + OUTPUT_METADATA_COLUMNS + [target_column_name, count_column]))
+    existing_keys = list(dict.fromkeys(k for row in current_rows for k in row.keys()))
+    headers = list(dict.fromkeys(CANONICAL_COLUMNS + OUTPUT_METADATA_COLUMNS + existing_keys + [column_name, count_column]))
     write_dicts_sheet(wb, MASTER_SHEET, current_rows, headers)
-    write_dicts_sheet(wb, SHORT_URL_LOG_SHEET, log_rows, ["姓名", "ONE ID 序號", "LINEID", "手機(CR)SMS", "目標欄位", "短網址", "次數", "命中方式"])
 
-    existing_manifest = []
-    if MANIFEST_SHEET in wb.sheetnames:
-        existing_manifest = sheet_to_dicts(wb[MANIFEST_SHEET])
-    existing_manifest.extend(manifest_rows)
+    log_headers = ["姓名", "手機(CR)SMS", "目標欄位", "短網址", "次數"]
+    existing_log = sheet_to_dicts(wb[SHORT_URL_LOG_SHEET]) if SHORT_URL_LOG_SHEET in wb.sheetnames else []
+    write_dicts_sheet(wb, SHORT_URL_LOG_SHEET, existing_log + log_rows, log_headers)
+
+    stat = source_csv_path.stat()
+    manifest_row = {
+        "operation": "collect_short_urls",
+        "file_name": source_csv_path.name,
+        "path": str(source_csv_path),
+        "size": str(stat.st_size),
+        "modified_time": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+        "sha1": file_sha1(source_csv_path),
+    }
+    existing_manifest = sheet_to_dicts(wb[MANIFEST_SHEET]) if MANIFEST_SHEET in wb.sheetnames else []
+    existing_manifest.append(manifest_row)
     write_manifest_sheet(wb, existing_manifest)
     wb.save(output_path)
-    return {
-        "users": len(current_rows),
-        "filled": filled,
-        "unmatched": unmatched,
-        "phone_url_map": len(phone_to_url),
-        "oneid_url_map": len(oneid_to_url),
-        "lineid_url_map": len(lineid_to_url),
+    return {"users": len(current_rows), "filled": filled, "unmatched": unmatched}
+
+
+_LINE_ID_RE = re.compile(r"LINE\s*ID_?(U[A-Za-z0-9]+)", re.IGNORECASE)
+
+
+def match_stay_list(output_path: Path, source_xlsx_path: Path) -> Dict[str, int]:
+    if not output_path.exists():
+        raise RuntimeError("請先建立或選擇整理好的輸出檔案。")
+    wb_out = load_workbook(output_path)
+    if MASTER_SHEET not in wb_out.sheetnames:
+        raise RuntimeError("找不到 Working_List，請先執行『合併檔案』。")
+
+    # Read step4 xlsx — headers are on row 2, skip row 1
+    wb_src = load_workbook(source_xlsx_path, data_only=True, read_only=True)
+    ws_src = wb_src.active
+    all_rows = list(ws_src.iter_rows(values_only=True))
+
+    # Find the header row: first row where at least 3 cells are non-empty
+    header_row_idx = None
+    for i, row in enumerate(all_rows):
+        if sum(1 for v in row if v not in (None, "")) >= 3:
+            header_row_idx = i
+            break
+    if header_row_idx is None:
+        raise RuntimeError("留名單檔案找不到欄位標題列。")
+
+    headers_src = [clean_text(v) for v in all_rows[header_row_idx]]
+    phone_col = next((i for i, h in enumerate(headers_src) if normalize_header(h) == normalize_header("聯絡電話")), None)
+    note_col = next((i for i, h in enumerate(headers_src) if normalize_header(h) == normalize_header("備註")), None)
+    if phone_col is None or note_col is None:
+        raise RuntimeError("留名單檔案找不到「聯絡電話」或「備註」欄位。")
+
+    phone_set: set = set()
+    lineid_set: set = set()
+    for row in all_rows[header_row_idx + 1:]:
+        note = clean_text(row[note_col] if note_col < len(row) else "")
+        if "精準行銷" not in note:
+            continue
+        phone = normalize_phone(row[phone_col] if phone_col < len(row) else "")
+        if phone:
+            phone_set.add(phone)
+        m = _LINE_ID_RE.search(note)
+        if m:
+            lineid_set.add(normalize_id(m.group(1)))
+
+    current_rows = sheet_to_dicts(wb_out[MASTER_SHEET])
+    sms_matched = 0
+    line_matched = 0
+
+    for row in current_rows:
+        sms_hit = any(
+            normalize_phone(row.get(f, "")) in phone_set
+            for f in ["手機(CR)SMS", "手機(和泰會員)SMS"]
+            if normalize_phone(row.get(f, ""))
+        )
+        row["簡訊留名單"] = "V" if sms_hit else "X"
+        if sms_hit:
+            sms_matched += 1
+
+        line_id = normalize_id(row.get("LINEID", ""))
+        line_hit = bool(line_id and line_id in lineid_set)
+        row["LINE留名單"] = "V" if line_hit else "X"
+        if line_hit:
+            line_matched += 1
+
+    headers = list(dict.fromkeys(CANONICAL_COLUMNS + OUTPUT_METADATA_COLUMNS))
+    write_dicts_sheet(wb_out, MASTER_SHEET, current_rows, headers)
+
+    stat = source_xlsx_path.stat()
+    manifest_row = {
+        "operation": "match_stay_list",
+        "file_name": source_xlsx_path.name,
+        "path": str(source_xlsx_path),
+        "size": str(stat.st_size),
+        "modified_time": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+        "sha1": file_sha1(source_xlsx_path),
     }
+    existing_manifest = sheet_to_dicts(wb_out[MANIFEST_SHEET]) if MANIFEST_SHEET in wb_out.sheetnames else []
+    existing_manifest.append(manifest_row)
+    write_manifest_sheet(wb_out, existing_manifest)
+    wb_out.save(output_path)
+    return {"users": len(current_rows), "sms_matched": sms_matched, "line_matched": line_matched}
 
 
 class FilterModeDialog:
@@ -947,9 +923,11 @@ class LeadListGUI:
         action_frame.pack(fill="x", pady=(12, 0))
         ttk.Button(action_frame, text="1. 合併檔案", command=self.do_merge).grid(row=0, column=0, padx=(0, 8), pady=4, sticky="ew")
         ttk.Button(action_frame, text="2. 去除近年訂過車名單", command=self.do_remove_recent).grid(row=0, column=1, padx=(0, 8), pady=4, sticky="ew")
-        ttk.Button(action_frame, text="3. 短網址", command=self.do_short_url).grid(row=0, column=2, pady=4, sticky="ew")
+        ttk.Button(action_frame, text="3. 產生手機號碼 Template", command=self.do_export_template).grid(row=0, column=2, padx=(0, 8), pady=4, sticky="ew")
+        ttk.Button(action_frame, text="4. 匯入短網址結果", command=self.do_collect_urls).grid(row=0, column=3, padx=(0, 8), pady=4, sticky="ew")
+        ttk.Button(action_frame, text="5. 比對留名單", command=self.do_match_stay_list).grid(row=0, column=4, pady=4, sticky="ew")
 
-        for idx in range(3):
+        for idx in range(5):
             action_frame.columnconfigure(idx, weight=1)
 
         log_frame = ttk.LabelFrame(frame, text="執行紀錄", padding=10)
@@ -1038,26 +1016,54 @@ class LeadListGUI:
             messagebox.showinfo("完成", f"去除近年受訂完成\n輸出：{output_path}")
         self.run_action(_run)
 
-    def do_short_url(self) -> None:
+    def do_export_template(self) -> None:
         def _run():
             output_path = self.get_output_path()
-            if not output_path.exists():
-                raise RuntimeError("請先建立整理好的檔案。")
-            wb = load_workbook(output_path, read_only=True)
-            if MASTER_SHEET not in wb.sheetnames:
-                raise RuntimeError("找不到 Working_List，請先執行『合併檔案』。")
-            current_rows = max(wb[MASTER_SHEET].max_row - 1, 0)
-            messagebox.showinfo("目前名單", f"合併檔案目前共有 {current_rows} 位使用者。")
-            column_name = simpledialog.askstring("短網址欄位", "請輸入要加入的欄位名稱：", parent=self.root)
+            save_path = filedialog.asksaveasfilename(
+                title="儲存手機號碼 Template",
+                defaultextension=".csv",
+                filetypes=[("CSV 檔案", "*.csv")],
+                initialfile="手機號碼_template.csv",
+            )
+            if not save_path:
+                return
+            self.log(f"開始產生手機號碼 Template...")
+            count = export_phone_template(output_path, Path(save_path))
+            self.log(f"完成。共匯出 {count} 筆手機號碼。")
+            messagebox.showinfo("完成", f"Template 已儲存：{save_path}")
+        self.run_action(_run)
+
+    def do_match_stay_list(self) -> None:
+        def _run():
+            output_path = self.get_output_path()
+            xlsx_path = filedialog.askopenfilename(
+                title="選擇留名單 xlsx",
+                filetypes=[("Excel 檔案", "*.xlsx")],
+            )
+            if not xlsx_path:
+                return
+            self.log(f"開始比對留名單：{xlsx_path}")
+            result = match_stay_list(output_path, Path(xlsx_path))
+            self.log(f"完成。共 {result['users']} 筆，簡訊留名單命中 {result['sms_matched']} 筆，LINE 留名單命中 {result['line_matched']} 筆。")
+            messagebox.showinfo("完成", f"留名單比對完成\n輸出：{output_path}")
+        self.run_action(_run)
+
+    def do_collect_urls(self) -> None:
+        def _run():
+            output_path = self.get_output_path()
+            column_name = simpledialog.askstring("短網址欄位", "請輸入欄位名稱（將產生「名稱」和「名稱_次數」兩欄）：", parent=self.root)
             if not column_name:
                 return
-            folder = filedialog.askdirectory(title="選擇短網址來源檔案所在資料夾")
-            if not folder:
+            csv_path = filedialog.askopenfilename(
+                title="選擇平台回傳的短網址 CSV",
+                filetypes=[("CSV 檔案", "*.csv")],
+            )
+            if not csv_path:
                 return
-            self.log(f"開始回填短網址，欄位：{column_name}，來源：{folder}")
-            result = add_short_urls(output_path, Path(folder), column_name.strip())
-            self.log(f"完成。共 {result['users']} 筆，成功回填 {result['filled']} 筆，未命中 {result['unmatched']} 筆。")
-            messagebox.showinfo("完成", f"短網址回填完成\n輸出：{output_path}")
+            self.log(f"開始匯入短網址，欄位：{column_name}，來源：{csv_path}")
+            result = collect_short_urls(output_path, Path(csv_path), column_name.strip())
+            self.log(f"完成。共 {result['users']} 筆，命中 {result['filled']} 筆，未命中 {result['unmatched']} 筆。")
+            messagebox.showinfo("完成", f"短網址匯入完成\n輸出：{output_path}")
         self.run_action(_run)
 
 
