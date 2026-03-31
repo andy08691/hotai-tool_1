@@ -254,7 +254,10 @@ def read_excel_records_bytes(
         record_data = {col: "" for col in CANONICAL_COLUMNS}
         for canonical, col_idx in header_map.items():
             if col_idx < len(row_values):
-                record_data[canonical] = clean_text(row_values[col_idx])
+                value = clean_text(row_values[col_idx])
+                if canonical in PHONE_FIELDS:
+                    value = normalize_phone(value)
+                record_data[canonical] = value
         if not any(record_data.values()):
             continue
         phones_empty = not any(record_data.get(f, "") for f in PHONE_FIELDS)
