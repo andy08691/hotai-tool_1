@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>名單整理工具</title>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Segoe UI", "PingFang TC", sans-serif; background: #f5f5f5; color: #222; }
+    header { background: #1a3a5c; color: #fff; padding: 16px 24px; }
+    header h1 { font-size: 1.25rem; font-weight: 600; }
+    header p  { font-size: 0.8rem; opacity: .75; margin-top: 4px; }
+    main { max-width: 860px; margin: 24px auto; padding: 0 16px 40px; }
+
+    /* init banner */
+    #init-banner { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px;
+      padding: 12px 16px; margin-bottom: 20px; font-size: .9rem; display: flex; align-items: center; gap: 10px; }
+    #init-banner .spinner { width: 18px; height: 18px; border: 3px solid #ccc;
+      border-top-color: #1a3a5c; border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* workbook status */
+    #wb-status { background: #fff; border: 1px solid #ddd; border-radius: 6px;
+      padding: 10px 16px; margin-bottom: 20px; font-size: .85rem; display: flex; justify-content: space-between; align-items: center; }
+    #wb-status span { color: #555; }
+    #btn-download { background: #1a3a5c; color: #fff; border: none; border-radius: 4px;
+      padding: 6px 14px; cursor: pointer; font-size: .85rem; }
+    #btn-download:disabled { background: #aaa; cursor: default; }
+    #btn-download:not(:disabled):hover { background: #2a5080; }
+
+    /* steps */
+    .step { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 18px 20px; margin-bottom: 16px; }
+    .step h2 { font-size: 1rem; margin-bottom: 12px; color: #1a3a5c; }
+    .step label { display: block; font-size: .85rem; margin-bottom: 4px; color: #444; }
+    .step input[type="file"],
+    .step input[type="text"],
+    .step select { width: 100%; padding: 7px 10px; border: 1px solid #ccc; border-radius: 4px;
+      font-size: .85rem; margin-bottom: 10px; }
+    .step input[type="file"] { padding: 5px; }
+    .filter-row { display: flex; gap: 8px; margin-bottom: 10px; }
+    .filter-row label { font-size: .82rem; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+    .run-btn { background: #1a3a5c; color: #fff; border: none; border-radius: 4px;
+      padding: 8px 20px; cursor: pointer; font-size: .9rem; }
+    .run-btn:hover:not(:disabled) { background: #2a5080; }
+    .run-btn:disabled { background: #aaa; cursor: default; }
+
+    /* log */
+    #log { background: #1e1e1e; color: #d4d4d4; border-radius: 8px; padding: 14px 16px;
+      font-size: .82rem; font-family: monospace; height: 200px; overflow-y: auto; white-space: pre-wrap; }
+    #log .ok  { color: #4ec9b0; }
+    #log .err { color: #f48771; }
+    #log .inf { color: #9cdcfe; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>名單整理工具</h1>
+  <p>所有運算在您的瀏覽器完成，資料不會上傳至任何伺服器。</p>
+</header>
+
+<main>
+  <div id="init-banner">
+    <div class="spinner"></div>
+    <span id="init-msg">正在載入 Python 執行環境，請稍候（約 10–20 秒）…</span>
+  </div>
+
+  <div id="wb-status">
+    <span id="wb-label">目前無輸出檔案</span>
+    <button id="btn-download" disabled>下載目前結果 (.xlsx)</button>
+  </div>
+
+  <!-- Step 1 -->
+  <div class="step">
+    <h2>步驟一：合併檔案</h2>
+    <label>選擇 G1_*.xlsx、G2_*.xlsx … 等來源檔案（可多選）</label>
+    <input type="file" id="s1-files" multiple accept=".xlsx" />
+    <label>不聯繫過濾模式</label>
+    <select id="s1-filter">
+      <option value="none">不過濾，全部匯入</option>
+      <option value="phone">電話（電銷）欄位標示不聯繫者，不匯入</option>
+      <option value="sms">SMS 欄位標示不聯繫者，不匯入</option>
+      <option value="either">電話或 SMS 任一標示不聯繫者，不匯入（最嚴格）</option>
+    </select>
+    <button class="run-btn" id="btn-s1" disabled>執行合併</button>
+  </div>
+
+  <!-- Step 2 -->
+  <div class="step">
+    <h2>步驟二：去除近年訂過車名單</h2>
+    <label>選擇近年受訂名單檔案（.xlsx 或 .csv，可多選）</label>
+    <input type="file" id="s2-files" multiple accept=".xlsx,.csv" />
+    <button class="run-btn" id="btn-s2" disabled>執行去除</button>
+  </div>
+
+  <!-- Step 3 -->
+  <div class="step">
+    <h2>步驟三：產生手機號碼 Template</h2>
+    <p style="font-size:.85rem;color:#555;margin-bottom:10px;">從 Working_List 匯出 SMS 手機號碼為 CSV，供上傳短網址平台。</p>
+    <button class="run-btn" id="btn-s3" disabled>產生並下載 Template CSV</button>
+  </div>
+
+  <!-- Step 4 -->
+  <div class="step">
+    <h2>步驟四：匯入短網址結果</h2>
+    <label>欄位名稱（例如：3月簡訊短網址）</label>
+    <input type="text" id="s4-colname" placeholder="請輸入欄位名稱" />
+    <label>選擇平台回傳的 CSV 檔案（格式：No, Phone, Url, Count）</label>
+    <input type="file" id="s4-csv" accept=".csv" />
+    <button class="run-btn" id="btn-s4" disabled>匯入短網址</button>
+  </div>
+
+  <!-- Step 5 -->
+  <div class="step">
+    <h2>步驟五：比對留名單</h2>
+    <label>選擇留名單 xlsx（需含「聯絡電話」與「備註」欄位）</label>
+    <input type="file" id="s5-xlsx" accept=".xlsx" />
+    <button class="run-btn" id="btn-s5" disabled>執行比對</button>
+  </div>
+
+  <!-- Log -->
+  <div id="log"><span class="inf">等待初始化完成…</span>
+</div>
+</main>
+
+<script>
+(async () => {
+  const logEl = document.getElementById("log");
+  const initBanner = document.getElementById("init-banner");
+  const initMsg = document.getElementById("init-msg");
+  const wbLabel = document.getElementById("wb-label");
+  const btnDownload = document.getElementById("btn-download");
+
+  let currentWbBytes = null;   // Uint8Array | null
+  let pyodide = null;
+  let ready = false;
+
+  function addLog(msg, cls = "") {
+    const span = document.createElement("span");
+    if (cls) span.className = cls;
+    span.textContent = "[" + new Date().toLocaleTimeString("zh-TW") + "] " + msg + "\n";
+    logEl.appendChild(span);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setReady(ok) {
+    ready = ok;
+    document.querySelectorAll(".run-btn").forEach(b => b.disabled = !ok);
+    btnDownload.disabled = !ok || !currentWbBytes;
+  }
+
+  function updateWbStatus(filename) {
+    wbLabel.textContent = filename ? "目前輸出檔案：" + filename : "目前無輸出檔案";
+    btnDownload.disabled = !ready || !currentWbBytes;
+  }
+
+  function downloadBytes(bytes, filename) {
+    const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadCsvBytes(bytes, filename) {
+    const blob = new Blob([bytes], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function fileToBytes(file) {
+    return new Uint8Array(await file.arrayBuffer());
+  }
+
+  async function filesToList(fileList) {
+    const result = [];
+    for (const f of fileList) {
+      result.push([f.name, await fileToBytes(f)]);
+    }
+    return result;
+  }
+
+  // ── Init Pyodide ──────────────────────────────────────────────────────────
+  try {
+    addLog("正在載入 Pyodide…", "inf");
+    pyodide = await loadPyodide();
+    addLog("正在安裝 openpyxl…", "inf");
+    await pyodide.loadPackage("openpyxl");
+
+    addLog("正在載入業務邏輯模組…", "inf");
+    const resp = await fetch("lead_core.py");
+    if (!resp.ok) throw new Error("無法載入 lead_core.py: " + resp.status);
+    const src = await resp.text();
+    await pyodide.runPythonAsync(src);
+
+    initBanner.style.display = "none";
+    setReady(true);
+    addLog("初始化完成，可以開始使用。", "ok");
+  } catch (e) {
+    initMsg.textContent = "初始化失敗：" + e.message;
+    addLog("初始化失敗：" + e, "err");
+    return;
+  }
+
+  // ── Download button ───────────────────────────────────────────────────────
+  btnDownload.addEventListener("click", () => {
+    if (!currentWbBytes) return;
+    const ts = new Date().toISOString().slice(0, 10);
+    downloadBytes(currentWbBytes, "名單整理_" + ts + ".xlsx");
+  });
+
+  // ── Step 1 ────────────────────────────────────────────────────────────────
+  document.getElementById("btn-s1").addEventListener("click", async () => {
+    const fileInput = document.getElementById("s1-files");
+    const filterMode = document.getElementById("s1-filter").value;
+    if (!fileInput.files.length) { addLog("請先選擇 G 檔案。", "err"); return; }
+
+    setReady(false);
+    addLog("開始合併…（過濾模式：" + filterMode + "）", "inf");
+    try {
+      const gFiles = await filesToList(fileInput.files);
+      pyodide.globals.set("_g_files", pyodide.toPy(gFiles));
+      pyodide.globals.set("_filter_mode", filterMode);
+      pyodide.globals.set("_existing_wb", currentWbBytes ? pyodide.toPy(Array.from(currentWbBytes)) : null);
+
+      await pyodide.runPythonAsync(`
+import js
+_wb_bytes_in = bytes(_existing_wb) if _existing_wb else None
+_file_tuples = [(name, bytes(b)) for name, b in _g_files]
+_result_bytes, _stats = merge_files(_file_tuples, _wb_bytes_in, filter_mode=_filter_mode)
+_result_js = list(_result_bytes)
+`);
+      const resultList = pyodide.globals.get("_result_js").toJs();
+      currentWbBytes = new Uint8Array(resultList);
+      const stats = pyodide.globals.get("_stats").toJs();
+      updateWbStatus("已合併");
+      addLog(
+        `完成。來源 ${stats.get("source_files")} 份，輸入 ${stats.get("input_rows") + stats.get("filtered_rows")} 筆` +
+        (stats.get("filtered_rows") ? `、過濾 ${stats.get("filtered_rows")} 筆` : "") +
+        `，輸出 ${stats.get("kept_rows")} 筆（去重 ${stats.get("dropped_rows")} 筆）。`, "ok"
+      );
+    } catch (e) {
+      addLog("失敗：" + e, "err");
+    }
+    setReady(true);
+  });
+
+  // ── Step 2 ────────────────────────────────────────────────────────────────
+  document.getElementById("btn-s2").addEventListener("click", async () => {
+    if (!currentWbBytes) { addLog("請先執行步驟一合併檔案。", "err"); return; }
+    const fileInput = document.getElementById("s2-files");
+    if (!fileInput.files.length) { addLog("請先選擇近年受訂名單檔案。", "err"); return; }
+
+    setReady(false);
+    addLog("開始去除近年受訂名單…", "inf");
+    try {
+      const orderFiles = await filesToList(fileInput.files);
+      pyodide.globals.set("_wb_bytes", pyodide.toPy(Array.from(currentWbBytes)));
+      pyodide.globals.set("_order_files", pyodide.toPy(orderFiles));
+
+      await pyodide.runPythonAsync(`
+_file_tuples2 = [(name, bytes(b)) for name, b in _order_files]
+_result_bytes2, _stats2 = remove_recent_orders(bytes(_wb_bytes), _file_tuples2)
+_result_js2 = list(_result_bytes2)
+`);
+      const resultList = pyodide.globals.get("_result_js2").toJs();
+      currentWbBytes = new Uint8Array(resultList);
+      const stats = pyodide.globals.get("_stats2").toJs();
+      addLog(`完成。原本 ${stats.get("before")} 筆，移除 ${stats.get("removed")} 筆，剩餘 ${stats.get("after")} 筆。`, "ok");
+    } catch (e) {
+      addLog("失敗：" + e, "err");
+    }
+    setReady(true);
+  });
+
+  // ── Step 3 ────────────────────────────────────────────────────────────────
+  document.getElementById("btn-s3").addEventListener("click", async () => {
+    if (!currentWbBytes) { addLog("請先執行步驟一合併檔案。", "err"); return; }
+
+    setReady(false);
+    addLog("正在產生手機號碼 Template…", "inf");
+    try {
+      pyodide.globals.set("_wb_bytes3", pyodide.toPy(Array.from(currentWbBytes)));
+
+      await pyodide.runPythonAsync(`
+_csv_bytes, _count = export_phone_template(bytes(_wb_bytes3))
+_csv_js = list(_csv_bytes)
+`);
+      const csvList = pyodide.globals.get("_csv_js").toJs();
+      const count = pyodide.globals.get("_count");
+      downloadCsvBytes(new Uint8Array(csvList), "手機號碼_template.csv");
+      addLog(`完成。共匯出 ${count} 筆手機號碼，已下載 CSV。`, "ok");
+    } catch (e) {
+      addLog("失敗：" + e, "err");
+    }
+    setReady(true);
+  });
+
+  // ── Step 4 ────────────────────────────────────────────────────────────────
+  document.getElementById("btn-s4").addEventListener("click", async () => {
+    if (!currentWbBytes) { addLog("請先執行步驟一合併檔案。", "err"); return; }
+    const colName = document.getElementById("s4-colname").value.trim();
+    if (!colName) { addLog("請輸入欄位名稱。", "err"); return; }
+    const fileInput = document.getElementById("s4-csv");
+    if (!fileInput.files.length) { addLog("請選擇平台回傳的 CSV 檔案。", "err"); return; }
+
+    setReady(false);
+    addLog(`開始匯入短網址（欄位：${colName}）…`, "inf");
+    try {
+      const csvFile = fileInput.files[0];
+      const csvBytes = await fileToBytes(csvFile);
+      pyodide.globals.set("_wb_bytes4", pyodide.toPy(Array.from(currentWbBytes)));
+      pyodide.globals.set("_csv_bytes4", pyodide.toPy(Array.from(csvBytes)));
+      pyodide.globals.set("_csv_fname4", csvFile.name);
+      pyodide.globals.set("_col_name4", colName);
+
+      await pyodide.runPythonAsync(`
+_result_bytes4, _stats4 = collect_short_urls(bytes(_wb_bytes4), bytes(_csv_bytes4), _csv_fname4, _col_name4)
+_result_js4 = list(_result_bytes4)
+`);
+      const resultList = pyodide.globals.get("_result_js4").toJs();
+      currentWbBytes = new Uint8Array(resultList);
+      const stats = pyodide.globals.get("_stats4").toJs();
+      addLog(`完成。共 ${stats.get("users")} 筆，命中 ${stats.get("filled")} 筆，未命中 ${stats.get("unmatched")} 筆。`, "ok");
+    } catch (e) {
+      addLog("失敗：" + e, "err");
+    }
+    setReady(true);
+  });
+
+  // ── Step 5 ────────────────────────────────────────────────────────────────
+  document.getElementById("btn-s5").addEventListener("click", async () => {
+    if (!currentWbBytes) { addLog("請先執行步驟一合併檔案。", "err"); return; }
+    const fileInput = document.getElementById("s5-xlsx");
+    if (!fileInput.files.length) { addLog("請選擇留名單 xlsx 檔案。", "err"); return; }
+
+    setReady(false);
+    addLog("開始比對留名單…", "inf");
+    try {
+      const xlsxFile = fileInput.files[0];
+      const xlsxBytes = await fileToBytes(xlsxFile);
+      pyodide.globals.set("_wb_bytes5", pyodide.toPy(Array.from(currentWbBytes)));
+      pyodide.globals.set("_xlsx_bytes5", pyodide.toPy(Array.from(xlsxBytes)));
+      pyodide.globals.set("_xlsx_fname5", xlsxFile.name);
+
+      await pyodide.runPythonAsync(`
+_result_bytes5, _stats5 = match_stay_list(bytes(_wb_bytes5), bytes(_xlsx_bytes5), _xlsx_fname5)
+_result_js5 = list(_result_bytes5)
+`);
+      const resultList = pyodide.globals.get("_result_js5").toJs();
+      currentWbBytes = new Uint8Array(resultList);
+      const stats = pyodide.globals.get("_stats5").toJs();
+      addLog(`完成。共 ${stats.get("users")} 筆，簡訊留名單命中 ${stats.get("sms_matched")} 筆，LINE 留名單命中 ${stats.get("line_matched")} 筆。`, "ok");
+    } catch (e) {
+      addLog("失敗：" + e, "err");
+    }
+    setReady(true);
+  });
+})();
+</script>
+</body>
+</html>
