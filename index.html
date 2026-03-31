@@ -67,7 +67,13 @@
 
   <div id="wb-status">
     <span id="wb-label">目前無輸出檔案</span>
-    <button id="btn-download" disabled>下載目前結果 (.xlsx)</button>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <label id="btn-load-label" style="background:#e8f0fe;color:#1a3a5c;border:1px solid #aac4f0;border-radius:4px;padding:6px 14px;cursor:pointer;font-size:.85rem;">
+        載入現有 .xlsx
+        <input type="file" id="load-existing" accept=".xlsx" style="display:none;" />
+      </label>
+      <button id="btn-download" disabled>下載目前結果 (.xlsx)</button>
+    </div>
   </div>
 
   <!-- Step 1 -->
@@ -211,6 +217,16 @@ await micropip.install("openpyxl")
     addLog("初始化失敗：" + e, "err");
     return;
   }
+
+  // ── Load existing workbook ───────────────────────────────────────────────
+  document.getElementById("load-existing").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    currentWbBytes = new Uint8Array(await file.arrayBuffer());
+    updateWbStatus(file.name);
+    addLog(`已載入現有檔案：${file.name}（${(currentWbBytes.length / 1024).toFixed(0)} KB）`, "ok");
+    e.target.value = "";  // 允許重複選同一個檔案
+  });
 
   // ── Download button ───────────────────────────────────────────────────────
   btnDownload.addEventListener("click", () => {
