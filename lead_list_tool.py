@@ -687,7 +687,7 @@ def export_phone_template(output_path: Path, template_output_path: Path) -> int:
         writer = csv.writer(f)
         writer.writerow(["Phone"])
         for phone in phones:
-            writer.writerow([phone])
+            writer.writerow(['="' + phone + '"'])
 
     return len(phones)
 

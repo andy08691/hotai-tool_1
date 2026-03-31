@@ -668,7 +668,7 @@ def export_phone_template(wb_bytes: bytes) -> Tuple[bytes, int]:
     writer = csv.writer(buf)
     writer.writerow(["Phone"])
     for phone in phones:
-        writer.writerow([phone])
+        writer.writerow(['="' + phone + '"'])
 
     csv_bytes = buf.getvalue().encode("utf-8-sig")
     return csv_bytes, len(phones)
