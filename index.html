@@ -190,8 +190,12 @@
   try {
     addLog("正在載入 Pyodide…", "inf");
     pyodide = await loadPyodide();
-    addLog("正在安裝 openpyxl…", "inf");
-    await pyodide.loadPackage("openpyxl");
+    addLog("正在安裝 openpyxl（首次約需 10–20 秒）…", "inf");
+    await pyodide.loadPackage("micropip");
+    await pyodide.runPythonAsync(`
+import micropip
+await micropip.install("openpyxl")
+`);
 
     addLog("正在載入業務邏輯模組…", "inf");
     const resp = await fetch("lead_core.py");
